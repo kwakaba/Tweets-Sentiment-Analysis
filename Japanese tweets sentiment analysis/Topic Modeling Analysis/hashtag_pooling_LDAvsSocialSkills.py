@@ -9,16 +9,21 @@ import pandas as pd
 import numpy as np
 import re
 import sys
-sys.path.insert(1, '/home/khan/topicModels-java')
+sys.path.insert(1, '/home/kwakaba/project/topicModels-java')
 import pytm
+sys.path.insert(1, '/home/kwakaba/datasets/tweets2018ja/scripts')
+import twicab
 import MeCab
 import time
 import glob
 import csv
 csv.field_size_limit(sys.maxsize)
 
+max_df = 0.5
+
 start_time = time.time()
-tagger = MeCab.Tagger("-Owakati")
+#tagger = MeCab.Tagger("-Owakati")
+tagger = twicab.TwiCab('-d /home/kwakaba/lib/mecab-ipadic-neologd/')
 
 def removeUsernames(txt):
     return re.sub(r'@\S+', '', txt)
@@ -29,9 +34,26 @@ def removeSpecialChar(txt):
 def removeURLs(txt):
     return re.sub(r'http\S+', '', txt)
 
+re1 = re.compile('^[a-zA-Z0-9]+$')
+re2 = re.compile('^[0-9]')
+stopwords = ['', 'ツイッター', 'ツイート', 'フォロー', 'フォロワー', 'リプライ', 
+        'リツイート', 'フォローリツイート', 'アカウント', 'フォロバ', 
+        'プロフィール', 'プロフ', 'ツイ', 'アカ']
+def additional_filter(token):
+    if re1.match(token):
+        return False
+    if re2.match(token):
+        return False
+    if token in stopwords:
+        return False
+    return True
+
 def word_tokenization(txt, tagger):
-    txt_ls = tagger.parse(txt).split()
-    return (" ".join(txt_ls))
+    tokens = tagger.fukuyama_tokenize(txt)
+    tokens = [t for t in tokens if additional_filter(t)]
+    return ' '.join(tokens)
+    #txt_ls = tagger.parse(txt).split()
+    #return (" ".join(txt_ls))
 
 #global dictonary for hashtags and tweets
 All_hashtags = {}
@@ -61,7 +83,7 @@ def detectHashtag(tweet):
 
 train_ls = [str(i) for i in range(6,28,1)]
 for d in train_ls:
-    fn = "training_tweets/{}".format(d)
+    fn = "training_tweets/{:0>2}".format(d)
     txt = ""
     with open(fn, 'r') as f:
         csv_reader = csv.reader(f, delimiter = '\t')
@@ -73,19 +95,20 @@ for d in train_ls:
 
 print("Total documents are", sum(All_hashtag_count.values()))
 
-corpus = []; count = 0
+corpus = [];
 for key in All_hashtags.keys():
-    corpus.append(All_hashtags[key])
+    if All_hashtag_count[key] >= 100:
+        corpus.append(All_hashtags[key])
 
-print("Total documents are", count)
+print("Total documents are", len(corpus))
 
-docs = pytm.DocumentSet(corpus, min_df=5, max_df=0.5)
+docs = pytm.DocumentSet(corpus, min_df=5, max_df=max_df)
 print("Corpus Created")
 
 #Applying LDA on our dataset
 n_topics = 100
 lda = pytm.SVILDA(n_topics, docs.get_n_vocab())
-lda.fit(docs, n_iteration=1000, B=1000, n_inner_iteration=5, n_hyper_iteration=20, J=5)
+lda.fit(docs, n_iteration=3000, B=1000, n_inner_iteration=5, n_hyper_iteration=20, J=5)
 print("LDA fitted")
 
 topic_list = []
@@ -100,28 +123,28 @@ for k, alpha in enumerate(alphas):
 print("Topics Done")
 training_time = time.time() - start_time
 
-original_df = pd.read_excel("Final1.xlsx")
-df = pd.read_excel("Final1.xlsx").values.tolist()
-
 extract_top_50 = pd.read_excel("result_sentiment_analysis.xlsx")
 a = extract_top_50.loc[extract_top_50[">=50"]>=0, "通し番号"]
-more_than_50_tweets_users = [i for i in a]
+more_than_50_tweets_users = [int(i) for i in a if not np.isnan(i)]
 
 corpus1 = []
-for d in df:
-    if d[0] in more_than_50_tweets_users:
-        fn = "tweets/{}.txt".format(d[0])
-        if fn in glob.glob('tweets/*.txt'):
-            txt = ""
-            with open(fn, 'r') as f:
-                txt += str(removeSpecialChar(removeURLs(removeUsernames(f.read()))))
-            corpus1.append(word_tokenization(txt, tagger))
+idxs = []
+for d in more_than_50_tweets_users:
+    fn = "tweets/{}.txt".format(d)
+    if fn in glob.glob('tweets/*.txt'):
+        txt = ""
+        with open(fn, 'r') as f:
+            txt += str(removeSpecialChar(removeURLs(removeUsernames(f.read()))))
+        corpus1.append(word_tokenization(txt, tagger))
+        idxs.append(d)
 
-docs1 = pytm.DocumentSet(corpus1, min_df=5, max_df=0.5)
+#docs1 = pytm.DocumentSet(corpus1, min_df=5, max_df=0.5)
+docs1 = docs.transform(corpus1)
 theta1 = lda.get_theta(docs1)
 print("Got theta values")
 
 df1 = pd.DataFrame(theta1)
+df1.insert(0, '通し番号', idxs)
 df2 = pd.DataFrame([[training_time, "Seconds"]])
 
 df0 = pd.DataFrame(topic_list)
